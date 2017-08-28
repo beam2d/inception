@@ -10,51 +10,8 @@ import chainer.initializers as I
 import chainer.links as L
 import numpy as np
 
-
-class ConvBnRelu(chainer.Chain):
-
-    def __init__(self, depth, ksize, stride=1, pad=0, initialW=I.HeNormal()):
-        super(ConvBnRelu, self).__init__()
-        with self.init_scope():
-            self.conv = L.Convolution2D(None, depth, ksize=ksize, stride=stride, pad=pad, initialW=initialW, nobias=True)
-            self.bn = L.BatchNormalization(depth, decay=0.9997, eps=0.001, use_gamma=False)
-
-    def __call__(self, x):
-        return F.relu(self.bn(self.conv(x)))
-
-    def load_tf_checkpoint(self, reader, name):
-        try:
-            self.conv.W.data[...] = reader.get_tensor(name + '/weights').transpose(3, 2, 0, 1)
-            self.bn.beta.data[...] = reader.get_tensor(name + '/BatchNorm/beta')
-            self.bn.avg_mean[...] = reader.get_tensor(name + '/BatchNorm/moving_mean')
-            self.bn.avg_var[...] = reader.get_tensor(name + '/BatchNorm/moving_variance')
-        except Exception:
-            print('failed at', name)
-            raise
-
-
-class TFLoadableChain(chainer.Chain):
-
-    def load_tf_checkpoint(self, reader, path):
-        for child in self.children():
-            full_name = '{}/{}'.format(path, child.name)
-            if isinstance(child, L.Convolution2D):
-                try:
-                    # Original model is 1001-way classification, but we only want 1000-way classification model
-                    if full_name.startswith('InceptionV3/Logits/Conv2d_1c_1x1'):
-                        start_index = 1
-                    else:
-                        start_index = 0
-                    W = reader.get_tensor(full_name + '/weights').transpose(3, 2, 0, 1)
-                    child.W.data[...] = W[start_index:]
-                    if hasattr(child, 'b'):
-                        b = reader.get_tensor(full_name + '/biases')
-                        child.b.data[...] = b[start_index:]
-                except Exception:
-                    print('failed at', full_name)
-                    raise
-            else:
-                child.load_tf_checkpoint(reader, full_name)
+from .conv import ConvBnRelu
+from .tf_loadable_chain import TFLoadableChain
 
 
 class InceptionBlock(TFLoadableChain):
@@ -282,7 +239,7 @@ class AuxiliaryLogits(TFLoadableChain):
 
 class InceptionV3(TFLoadableChain):
 
-    def __init__(self, num_classes=1000, dropout_keep_prob=0.8, enable_aux=False):
+    def __init__(self, dropout_keep_prob=0.8, enable_aux=False):
         super(InceptionV3, self).__init__()
         with self.init_scope():
             self.Conv2d_1a_3x3 = ConvBnRelu(32, 3, stride=2)
@@ -303,16 +260,15 @@ class InceptionV3(TFLoadableChain):
             self.Mixed_7b = InceptionBlockExpanded('b')
             self.Mixed_7c = InceptionBlockExpanded('c')
 
-            self.Logits = TFLoadableChain()
+            self.Logits = TFLoadableChain(final_layer_name='Conv2d_1c_1x1')
             with self.Logits.init_scope():
                 self.Logits.Conv2d_1c_1x1 = L.Convolution2D(None, num_classes, 1)
 
             if enable_aux:
-                self.AuxLogits = AuxiliaryLogits(num_classes)
+                self.AuxLogits = AuxiliaryLogits(1000)
 
         self.dropout_rate = 1 - dropout_keep_prob
         self.enable_aux = enable_aux
-        self.cnt = 0
 
     def __call__(self, x):
         # Preprocessing

@@ -2,10 +2,12 @@ import chainer
 import fire
 
 from inception import inception_v3
+from inception import inception_resnet_v2
 
 
 _MODEL_LOADERS = {
-    'InceptionV3': inception_v3.load_inception_v3
+    'InceptionV3': inception_v3.load_inception_v3,
+    'InceptionResnetV2': inception_resnet_v2.load_inception_resnet_v2,
 }
 
 
